@@ -71,7 +71,7 @@
         <button id="btnSelectRect">Rectangle</button>
         <button id="btnSelectLasso">Lasso</button>
       </div>
-      <button id="btnClearSel" class="danger">Clear Current Selection</button>
+      <button id="btnClearSel" class="danger">Clear Selection</button>
     </div>
 
     <div class="card">
@@ -79,10 +79,10 @@
       <select id="bdrSelect"><option value="">Select Existing BDR</option></select>
       <input id="bdrInput" placeholder="Or type new BDR name"/>
       <div class="grid">
-        <button id="btnAssign" class="primary">Assign Selected</button>
-        <button id="btnClearAssign">Remove Assignment</button>
+        <button id="btnAssign" class="primary">Assign</button>
+        <button id="btnClearAssign">Remove</button>
       </div>
-      <button id="btnAutoFill" class="action" style="margin-top:10px;">✨ Smart Fill Unassigned Gaps</button>
+      <button id="btnAutoFill" class="action" style="margin-top:10px;">✨ Smart Fill Gaps</button>
       <div class="legend" id="legend"></div>
     </div>
 
@@ -100,17 +100,17 @@
 </div>
 
 <script>
-/* ================= CONFIG & STATE ================= */
+/* ================= STATE ================= */
 const GEOJSON_URL = "https://shreyasd4010.github.io/GeoBoost/NL_PC4.json";
 const state = {
-  map:null, currentView:'asIs', shapes:null, propKey:'PC4',
+  map:null, currentView:'asIs', shapes:null, propKey:'postcode',
   features:new Map(), centroids:new Map(),
   assignments:{ asIs:new Map(), optimized:new Map() },
   selection:new Set(), geoLayer:null
 };
 
 const bdrColors = {};
-const palette = ["#4ade80","#60a5fa","#f472b6","#f97316","#facc15","#c084fc","#22d3ee","#a3e635"];
+const palette = ["#4ade80","#60a5fa","#f472b6","#f97316","#facc15","#c084fc","#22d3ee"];
 
 /* ================= INIT ================= */
 window.onload = async () => {
@@ -125,7 +125,7 @@ window.onload = async () => {
   }
 };
 
-/* ================= SPATIAL DATA LOADING ================= */
+/* ================= DATA LOADING & VALIDATION ================= */
 async function loadShapes(fileData = null) {
   const ghStatus = document.getElementById('ghStatus');
   const statusBox = document.getElementById('statusBox');
@@ -143,18 +143,26 @@ async function loadShapes(fileData = null) {
     state.features.clear();
     state.centroids.clear();
 
-    // Index Features with Safety Checks
+    // Smart Auto-detection of Property Key
+    if (geo.features.length > 0) {
+      const firstProps = geo.features[0].properties;
+      if (firstProps.hasOwnProperty('postcode')) state.propKey = 'postcode';
+      else if (firstProps.hasOwnProperty('PC4')) state.propKey = 'PC4';
+    }
+
     geo.features.forEach(f => {
       const code = String(f.properties[state.propKey] || "");
       if (!code) return;
 
-      // GEOMETRY VALIDATION: Skip malformed coordinates
       if (f.geometry && f.geometry.coordinates && f.geometry.coordinates.length > 0) {
         try {
-          state.features.set(code, f);
-          state.centroids.set(code, turf.centroid(f).geometry.coordinates);
-        } catch (turfError) {
-          console.warn(`Skipping PC ${code}: Malformed Geometry`, turfError);
+          const centroid = turf.centroid(f).geometry.coordinates;
+          if (!isNaN(centroid[0]) && !isNaN(centroid[1])) {
+            state.features.set(code, f);
+            state.centroids.set(code, centroid);
+          }
+        } catch (e) {
+          console.warn(`Skipping PC ${code}: Invalid Geometry`);
         }
       }
     });
@@ -165,7 +173,7 @@ async function loadShapes(fileData = null) {
     console.error("Critical Load Error:", e);
     statusBox.style.display = 'block';
     statusBox.style.color = "#ff5555";
-    statusBox.innerText = `Error: ${e.message}. Map data may be corrupted.`;
+    statusBox.innerText = `Error: ${e.message}. Upload shapes manually.`;
     return false;
   }
 }
@@ -173,7 +181,9 @@ async function loadShapes(fileData = null) {
 function renderMap() {
   if (state.geoLayer) state.map.removeLayer(state.geoLayer);
   
-  state.geoLayer = L.geoJSON(state.shapes, {
+  const validatedFeatures = state.shapes.features.filter(f => state.features.has(String(f.properties[state.propKey])));
+  
+  state.geoLayer = L.geoJSON({ type: "FeatureCollection", features: validatedFeatures }, {
     style: styleFn,
     onEachFeature: (f, l) => {
       l.on('click', (e) => {
@@ -188,11 +198,11 @@ function renderMap() {
         const b = state.assignments[state.currentView].get(c) || "Unassigned";
         return `<b>PC: ${c}</b><br>BDR: ${b}`;
       }, { sticky: true });
-    },
-    filter: (f) => state.features.has(String(f.properties[state.propKey])) // Only show features with valid geometry
+    }
   }).addTo(state.map);
   
-  state.map.fitBounds(state.geoLayer.getBounds());
+  const bounds = state.geoLayer.getBounds();
+  if (bounds.isValid()) state.map.fitBounds(bounds);
 }
 
 /* ================= DRAWING TOOLS ================= */
@@ -237,12 +247,13 @@ function checkPowerBI() {
   if (window.name) {
     try {
       const data = JSON.parse(window.name);
-      if (!Array.isArray(data)) return;
-      document.getElementById("pbiBadge").style.display = "inline";
-      state.assignments.asIs.clear();
-      data.forEach(r => {
-        if (r.PostalCode) state.assignments.asIs.set(String(r.PostalCode), r.BDR);
-      });
+      if (Array.isArray(data)) {
+        document.getElementById("pbiBadge").style.display = "inline";
+        state.assignments.asIs.clear();
+        data.forEach(r => {
+          if (r.PostalCode) state.assignments.asIs.set(String(r.PostalCode), r.BDR);
+        });
+      }
     } catch(e) {}
   }
 }
@@ -280,7 +291,7 @@ document.getElementById("btnClearSel").onclick = () => { state.selection.clear()
 
 document.getElementById("btnAssign").onclick = () => {
   const b = document.getElementById("bdrInput").value.trim() || document.getElementById("bdrSelect").value;
-  if (!b) return alert("Select or type a BDR name.");
+  if (!b) return;
   state.selection.forEach(c => state.assignments[state.currentView].set(c, b));
   state.selection.clear();
   refreshUI();
@@ -299,7 +310,7 @@ document.getElementById("btnAutoFill").onclick = () => {
     if (currentMap.has(code)) assigned.push({ pt: turf.point(pt), bdr: currentMap.get(code) });
   });
 
-  if (assigned.length === 0) return alert("Assign at least one BDR manually first.");
+  if (assigned.length === 0) return alert("Assign one BDR manually first.");
 
   const assignedCollection = turf.featureCollection(assigned.map(a => a.pt));
   state.centroids.forEach((pt, code) => {
