@@ -1,203 +1,536 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>GeoBoost Territory Optimizer</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GeoBoost Territory Optimizer | ABInBev</title>
 
-  <!-- Libraries -->
+  <script>
+    window.onerror = function(msg, url, line) {
+      document.body.innerHTML = '<div style="background:#222;color:#ff5555;padding:20px;font-family:sans-serif;"><h3>Critical Error</h3><p>'+msg+'</p><p>Line: '+line+'</p></div>';
+    };
+  </script>
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
   <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+  <script src="https://unpkg.com/shpjs@4.0.4/dist/shp.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <style>
-    html,body{margin:0;height:100%;background:#0b0b0c;color:#eaeaf0;font-family:system-ui}
-    .app{display:grid;grid-template-columns:380px 1fr;height:100%}
-    aside{background:#111;padding:12px;overflow:auto}
-    main{position:relative}
-    #map{position:absolute;inset:0}
-    .card{background:#0f1013;border:1px solid #23242a;border-radius:10px;padding:10px;margin-bottom:10px}
-    button,select,input{width:100%;padding:6px;margin-top:6px}
+    :root{ --bg:#0b0b0c; --panel:#111114; --panel2:#17181b; --text:#eaeaf0; --muted:#9da3af; --accent:#ffd166; --accent2:#8ab4ff; --success:#4ade80; }
+    *{box-sizing:border-box}
+    html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:Inter,system-ui,sans-serif; }
+    
+    .app { display:grid; grid-template-columns:380px 1fr; height:100%; width:100%; }
+    aside { background:linear-gradient(180deg,var(--panel),var(--panel2)); border-right:1px solid #1f2126; padding:12px; overflow-y:auto; height:100%; }
+    main { position:relative; height:100%; width:100%; }
+    #map { position:absolute; inset:0; z-index: 1; }
+    
+    h1{font-size:16px;margin:0 0 4px;letter-spacing:0.2px; color:var(--accent);}
+    .sub{font-size:11px;color:var(--muted);margin-bottom:10px}
+    .card{background:#0f1013;border:1px solid #23242a;border-radius:12px;padding:10px;margin-bottom:10px;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+    
+    .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+    .row>*{flex:1}
+    label{font-size:11px;color:var(--muted);display:block;margin-bottom:4px;font-weight:600}
+    
+    input,select,button,textarea{width:100%;padding:8px;border-radius:6px;border:1px solid #2a2c34;background:#121318;color:var(--text);font-size:11px}
+    select[multiple]{height:120px}
+    button{cursor:pointer; transition: opacity 0.2s; border:none;}
+    button:hover{opacity:0.8}
+    button:disabled{opacity:0.3; cursor:not-allowed;}
+    button.primary{background:linear-gradient(135deg,var(--accent),#ffb703);color:#1a1a1a;font-weight:600}
+    button.ghost{background:#1b1c21;color:#ccc;border:1px solid #2a2c34}
+    button.action{background:#1f2937; color:var(--accent2); border:1px solid var(--accent2); font-weight:600;}
+    
+    /* PBI Indicator */
+    .pbi-badge { background:#facc15; color:#000; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:bold; display:none; }
+    
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-    .tab{padding:6px;text-align:center;border:1px solid #333;cursor:pointer}
-    .tab.active{background:#333}
-    .legend{display:flex;flex-wrap:wrap;gap:4px}
-    .item{font-size:10px}
-    table{width:100%;font-size:10px}
+    .tabs{display:flex;gap:6px;margin-bottom:10px}
+    .tab{flex:1;text-align:center;padding:8px;border-radius:6px;border:1px solid #2a2c34;background:#121318;cursor:pointer;font-size:11px}
+    .tab.active{background:#1d1f25;border-color:#555;color:#fff;font-weight:600}
+    
+    .legend{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+    .legend .item{display:flex;align-items:center;gap:4px;background:#14151a;border:1px solid #2a2c34;border-radius:99px;padding:2px 8px;font-size:10px}
+    .swatch{width:10px;height:10px;border-radius:2px}
+    
+    .table-wrap{max-height:220px;overflow:auto;border:1px solid #2a2c34;border-radius:8px;margin-top:8px}
+    table{width:100%;border-collapse:collapse;font-size:10px;color:#eaeaf0}
+    th,td{padding:6px 8px;border-bottom:1px solid #2a2c34;white-space:nowrap;text-align:left}
+    th{background:#1d1f25;position:sticky;top:0;color:var(--muted)}
+    tbody tr:hover{background:rgba(255,255,255,0.05);cursor:pointer}
+    .status-msg { font-size:11px; padding:8px; border-radius:6px; margin-bottom:10px; background:#1f2937; border:1px solid #374151; color:#ccc; display:none; }
   </style>
 </head>
-
 <body>
 <div class="app">
   <aside>
-    <h3>GeoBoost <span id="pbiBadge" style="display:none;color:#facc15">POWER BI</span></h3>
+    <h1>GeoBoost Territory Optimizer <span id="pbiBadge" class="pbi-badge">POWER BI LINKED</span></h1>
+    <div class="sub">Integrated Strategic Planning Tool</div>
+    <div id="statusBox" class="status-msg"></div>
 
     <div class="card">
-      <div class="grid" id="viewTabs">
+      <div class="tabs" id="viewTabs">
         <div class="tab active" data-view="asIs">As-Is</div>
         <div class="tab" data-view="optimized">Optimized</div>
       </div>
-      <button id="btnSeed">Seed Optimized</button>
+      <div class="grid">
+        <button id="btnSeed" class="ghost">Seed Optimized</button>
+        <button id="btnSaveProj" class="ghost">Save Project</button>
+      </div>
+    </div>
+
+    <div class="card" id="shapeCard">
+      <label>1. Map Shapes</label>
+      <div id="githubStatus" style="font-size: 10px; color: var(--success); margin-bottom: 5px; display:none;">✔ NL_PC4.json loaded from GitHub</div>
+      <input id="shapeFile" type="file" accept=".json,.geojson,.zip" />
+      <select id="propKeySelect" style="margin-top:6px"></select>
     </div>
 
     <div class="card">
-      <label>Filter by BDR</label>
+      <label>2. Data & Filters</label>
+      
+      <div id="manualUploadBox">
+        <input id="bdrCsv" type="file" accept=".csv,.xlsx" />
+        <div style="text-align:center; margin:6px 0; font-size:10px; color:#555;">- OR -</div>
+      </div>
+
+      <div id="pbiStatus" style="display:none; padding:8px; background:#374151; border-radius:6px; margin-bottom:8px; font-size:11px; color:#a5f3fc;">
+        Data loaded from Power BI: <b>GeoBoost_Input_NL</b>
+      </div>
+
+      <div class="row" style="margin-top:6px">
+        <div><span style="font-size:9px;color:#888">PC Col:</span><select id="colCode"></select></div>
+        <div><span style="font-size:9px;color:#888">BDR Col:</span><select id="colBDR"></select></div>
+      </div>
+      <label style="margin-top:8px">Filter View by BDR</label>
       <select id="filterBDR" multiple></select>
-      <div class="grid">
-        <button id="btnApplyFilters">Apply</button>
-        <button id="btnClearFilter">Reset</button>
+      <div class="grid" style="margin-top:6px">
+        <button id="btnApplyFilters" class="primary">Apply Filter</button>
+        <button id="btnClearFilter" class="ghost">Reset Filter</button>
       </div>
     </div>
 
     <div class="card">
-      <button id="btnSelectRect">Rectangle</button>
-      <button id="btnSelectLasso">Lasso</button>
-      <button id="btnSelectAll">Select All</button>
-      <button id="btnClearSel">Clear</button>
+      <label>3. Selection & Assignment</label>
+      
+      <div class="grid" style="margin-bottom:8px;">
+        <button id="btnUndo" class="ghost" disabled>↩ Undo</button>
+        <button id="btnRedo" class="ghost" disabled>↪ Redo</button>
+      </div>
 
-      <select id="bdrSelect"></select>
-      <input id="bdrInput" placeholder="New BDR"/>
-      <button id="btnAssign">Assign</button>
-      <button id="btnClearAssign">Clear Assign</button>
-    </div>
+      <button id="btnAutoFill" class="action" style="margin-bottom:8px; width:100%; padding:10px;">✨ Fill Unassigned Gaps</button>
 
-    <div class="card">
-      <button id="btnAutoFill">✨ Fill Gaps</button>
+      <div class="grid">
+        <button id="btnSelectRect" class="ghost">Rectangle</button>
+        <button id="btnSelectLasso" class="ghost">Lasso</button>
+      </div>
+      <div class="grid" style="margin-top:6px">
+        <button id="btnSelectAll" class="ghost">Select All (Filtered)</button>
+        <button id="btnSelectVisible" class="ghost">Select Viewport</button>
+      </div>
+      <button id="btnClearSel" class="ghost" style="margin-top:6px">Clear Selection</button>
+      
+      <select id="bdrSelect" style="margin-top:8px"><option value="">Select existing BDR</option></select>
+      <input id="bdrInput" placeholder="or type new BDR name" style="margin-top:6px"/>
+      <div class="grid" style="margin-top:6px">
+        <button id="btnAssign" class="primary">Assign Selected</button>
+        <button id="btnClearAssign" class="ghost">Clear Assignments</button>
+      </div>
       <div class="legend" id="legend"></div>
     </div>
 
     <div class="card">
-      <button id="btnExport">Export CSV</button>
-      <table>
-        <thead><tr><th>BDR</th><th>Count</th></tr></thead>
-        <tbody id="statsBody"></tbody>
-      </table>
+      <label>4. Summary</label>
+      <button id="btnExport" class="ghost" style="margin-bottom:8px">Export CSV</button>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>BDR</th><th>Count</th><th>Max km</th><th>Avg km</th></tr></thead>
+          <tbody id="statsBody"></tbody>
+        </table>
+      </div>
     </div>
   </aside>
-
   <main><div id="map"></div></main>
 </div>
 
 <script>
-/* ================= CONFIG ================= */
-const GEOJSON_URL =
-  "https://shreyasd4010.github.io/GeoBoost/NL_PC4.json";
-
-/* ================= STATE ================= */
-const state={
-  map:null,currentView:'asIs',
-  shapes:null,propKey:'PC4',
-  features:new Map(),centroids:new Map(),
-  assignments:{asIs:new Map(),optimized:new Map()},
-  selection:new Set(),rawData:[]
+/* --- Global State --- */
+const state = {
+  map:null, draw:null, currentView:'asIs', 
+  shapes:null, propKey:null, shapeCodes:new Set(),
+  layers:{asIs:null, optimized:null}, selection:new Set(),
+  assignments:{asIs:new Map(), optimized:new Map()},
+  centroids:new Map(), features:new Map(), rawData: []
 };
 
-const colors={},palette=["#4ade80","#60a5fa","#f472b6","#f97316"];
+const palette = ['#4ade80','#60a5fa','#f472b6','#f97316','#facc15','#34d399','#c084fc','#fb7185','#22d3ee','#a3e635','#f43f5e','#10b981','#8b5cf6','#fde047','#38bdf8','#f59e0b'];
+const bdrColors = new Map();
 
-/* ================= INIT ================= */
-window.onload=async()=>{
-  state.map=L.map("map").setView([52.1,5.3],7);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(state.map);
-
-  await loadShapes();
-  initPowerBI();
+/* --- History Module --- */
+const History = {
+  stack: [], cursor: -1, maxLimit: 50,
+  capture() { return { asIs: Array.from(state.assignments.asIs.entries()), optimized: Array.from(state.assignments.optimized.entries()) }; },
+  push() {
+    if (this.cursor < this.stack.length - 1) this.stack = this.stack.slice(0, this.cursor + 1);
+    this.stack.push(this.capture());
+    if (this.stack.length > this.maxLimit) this.stack.shift(); else this.cursor++;
+    this.updateUI();
+  },
+  restore(snapshot) {
+    state.assignments.asIs = new Map(snapshot.asIs);
+    state.assignments.optimized = new Map(snapshot.optimized);
+    refreshDropdowns(); restyle(); renderSummary(); this.updateUI();
+  },
+  undo() { if (this.cursor > 0) { this.cursor--; this.restore(this.stack[this.cursor]); } },
+  redo() { if (this.cursor < this.stack.length - 1) { this.cursor++; this.restore(this.stack[this.cursor]); } },
+  updateUI() {
+    document.getElementById('btnUndo').disabled = this.cursor <= 0;
+    document.getElementById('btnRedo').disabled = this.cursor >= this.stack.length - 1;
+  },
+  reset() { this.stack = [this.capture()]; this.cursor = 0; this.updateUI(); }
 };
 
-/* ================= SHAPES ================= */
-async function loadShapes(){
-  const geo=await fetch(GEOJSON_URL).then(r=>r.json());
-  state.shapes=geo;
-  geo.features.forEach(f=>{
-    const c=f.properties[state.propKey];
-    state.features.set(c,f);
+/* --- Init --- */
+window.onload = () => {
+  state.map = L.map('map', { preferCanvas:true }).setView([52.13, 5.29], 7); // Default Center NL
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(state.map);
+  state.layers.asIs = L.geoJSON(null,{style:styleFn('asIs'), onEachFeature:featFn}).addTo(state.map);
+  state.layers.optimized = L.geoJSON(null,{style:styleFn('optimized'), onEachFeature:featFn});
+  initDraw();
+  
+  // Try to load JSON from GitHub Automatically
+  loadGitHubShape();
+
+  // History Listeners
+  document.getElementById('btnUndo').onclick = () => History.undo();
+  document.getElementById('btnRedo').onclick = () => History.redo();
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); History.undo(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); History.redo(); }
   });
-  L.geoJSON(geo,{style:styleFn}).addTo(state.map);
-}
+  History.reset();
 
-/* ================= POWER BI ================= */
-function initPowerBI(){
-  if(window.name){
-    try{
-      const data=JSON.parse(window.name);
-      state.rawData=data;
-      document.getElementById("pbiBadge").style.display="inline";
-      applyAssignments();
-    }catch(e){}
+  // START POLLING FOR POWER BI DATA
+  let attempts = 0;
+  const poll = setInterval(() => {
+    attempts++;
+    if (checkPowerBI() || attempts >= 20) clearInterval(poll);
+  }, 500);
+};
+
+/* --- GitHub Automated Loading --- */
+async function loadGitHubShape() {
+  const GITHUB_URL = "https://raw.githubusercontent.com/shreyasd4010/GeoBoost_NL/main/NL_PC4.json";
+  setStatus("Fetching NL_PC4.json from GitHub...", "ok");
+  
+  try {
+    const response = await fetch(GITHUB_URL);
+    if (!response.ok) throw new Error("GitHub file not found.");
+    
+    const geo = await response.json();
+    processShapeData(geo);
+    
+    document.getElementById('githubStatus').style.display = 'block';
+    setStatus("GitHub Shapes Loaded.", "ok");
+  } catch (err) {
+    console.warn("Could not load from GitHub. Please upload manually.", err);
+    setStatus("GitHub fetch failed. Please upload shapes manually.", "err");
   }
 }
 
-/* ================= ASSIGN ================= */
+function processShapeData(geo) {
+  state.shapes = geo.features ? geo : {type:'FeatureCollection',features:geo.features||[]};
+  const props = Object.keys(state.shapes.features[0].properties);
+  const sel = document.getElementById('propKeySelect');
+  sel.innerHTML = props.map(p => `<option value="${p}">${p}</option>`).join("");
+  state.propKey = props.find(p=>/postal|code|zip|pc/i.test(p)) || props[0];
+  sel.value = state.propKey;
+  reloadShapes();
+}
+
+/* --- POWER BI BRIDGE --- */
+function checkPowerBI() {
+  if (window.GeoBoost_Input_NL && Array.isArray(window.GeoBoost_Input_NL)) {
+    connectPowerBI(window.GeoBoost_Input_NL);
+    return true;
+  } 
+  try {
+    if (window.name) {
+      const data = JSON.parse(window.name);
+      if (Array.isArray(data)) {
+        connectPowerBI(data);
+        return true;
+      }
+    }
+  } catch(e) {}
+  return false;
+}
+
+window.connectPowerBI = function(dataArray) {
+  if (!dataArray || !dataArray.length) return;
+  document.getElementById('manualUploadBox').style.display = 'none';
+  document.getElementById('pbiStatus').style.display = 'block';
+  document.getElementById('pbiBadge').style.display = 'inline-block';
+  state.rawData = dataArray;
+  initColumns(); 
+  setStatus(`Loaded ${dataArray.length} rows from Power BI.`, "ok");
+};
+
+/* --- Data Handling --- */
+document.getElementById('shapeFile').onchange = async e => {
+  const f = e.target.files[0];
+  const geo = f.name.endsWith('.zip') ? await shp(f) : JSON.parse(await f.text());
+  processShapeData(geo);
+};
+
+function reloadShapes(){
+  state.layers.asIs.clearLayers(); state.layers.optimized.clearLayers();
+  state.features.clear(); state.centroids.clear(); state.shapeCodes.clear();
+  state.layers.asIs.addData(state.shapes);
+  state.layers.optimized.addData(state.shapes);
+  state.shapes.features.forEach(f => {
+    const c = String(f.properties[state.propKey]||'').toUpperCase().replace(/\s/g,'');
+    if(c){ state.shapeCodes.add(c); state.features.set(c, f); }
+  });
+  state.map.fitBounds(L.geoJSON(state.shapes).getBounds().pad(0.1));
+  restyle();
+}
+
+document.getElementById('bdrCsv').onchange = async e => {
+  const f = e.target.files[0];
+  if(f.name.match(/\.xls/)){
+    const d=await f.arrayBuffer(), wb=XLSX.read(d,{type:'array'});
+    state.rawData = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
+  } else {
+    const lines = (await f.text()).split(/\n/).filter(x=>x.trim());
+    const h = lines[0].split(/[,\t]/).map(s=>s.trim());
+    state.rawData = lines.slice(1).map(l=>{
+      const d=l.split(/[,\t]/).map(s=>s.trim());
+      const o={}; h.forEach((k,i)=>o[k]=d[i]); return o;
+    });
+  }
+  initColumns();
+};
+
+function initColumns(){
+  const keys = Object.keys(state.rawData[0]||{});
+  const selC = document.getElementById('colCode'), selB = document.getElementById('colBDR');
+  selC.innerHTML = keys.map(k=>`<option value="${k}">${k}</option>`).join("");
+  selB.innerHTML = keys.map(k=>`<option value="${k}">${k}</option>`).join("");
+  selC.value = keys.find(k=>/postal|code|zip|pc/i.test(k))||keys[0];
+  selB.value = keys.find(k=>/person|bdr|rep/i.test(k))||keys[1];
+  applyAssignments();
+}
+
 function applyAssignments(){
+  const kC = document.getElementById('colCode').value, kB = document.getElementById('colBDR').value;
   state.assignments.asIs.clear();
   state.rawData.forEach(r=>{
-    state.assignments.asIs.set(r.PostalCode,r.BDR);
+    const c = String(r[kC]||'').toUpperCase().replace(/\s/g,''), b = String(r[kB]||'').trim();
+    if(c && b) state.assignments.asIs.set(c,b);
   });
-  refreshUI();
+  refreshDropdowns(); restyle(); renderSummary();
+  History.reset(); 
 }
 
-/* ================= UI ================= */
-function styleFn(f){
-  const c=f.properties[state.propKey];
-  const b=state.assignments[state.currentView].get(c);
-  if(!b)return{fillOpacity:0.1,color:"#444"};
-  if(!colors[b])colors[b]=palette[Object.keys(colors).length%palette.length];
-  return{fillColor:colors[b],fillOpacity:0.7,color:"#222"};
+/* --- GAP FILLER --- */
+document.getElementById('btnAutoFill').onclick = () => {
+  setStatus("Calculating...", "ok");
+  setTimeout(() => {
+    const viewMap = state.assignments[state.currentView];
+    const unassigned = [];
+    const assignedPts = [];
+    state.shapeCodes.forEach(code => {
+      const bdr = viewMap.get(code);
+      const pt = getCentroid(code);
+      if (!pt) return;
+      if (bdr && bdr.toString().trim() !== "") assignedPts.push({ code, bdr, pt: turf.point(pt) });
+      else unassigned.push({ code, pt: turf.point(pt) });
+    });
+    if (assignedPts.length === 0) return alert("No assigned BDRs found.");
+    if (unassigned.length === 0) return alert("No gaps found!");
+    const assignedCollection = turf.featureCollection(assignedPts.map(a => a.pt));
+    let fillCount = 0;
+    unassigned.forEach(gap => {
+      const nearest = turf.nearestPoint(gap.pt, assignedCollection);
+      const sourceIdx = nearest.properties.featureIndex;
+      viewMap.set(gap.code, assignedPts[sourceIdx].bdr);
+      fillCount++;
+    });
+    refreshDropdowns(); restyle(); renderSummary(); setStatus(`Filled ${fillCount} gaps.`, "ok");
+    History.push(); 
+  }, 50);
+};
+
+/* --- Selection Logic --- */
+function initDraw(){
+  state.draw = new L.Control.Draw({ draw:{polyline:false,marker:false,circle:false,circlemarker:false,rectangle:{shapeOptions:{color:'#fff'}},polygon:{shapeOptions:{color:'#fff'}}}, edit:false });
+  state.map.on(L.Draw.Event.CREATED, e => {
+    const poly = e.layer.toGeoJSON();
+    state.map.removeLayer(e.layer);
+    state.features.forEach((feat, code) => {
+      const pt = getCentroid(code);
+      if(pt && turf.booleanPointInPolygon(turf.point(pt), poly)) state.selection.add(code);
+    });
+    restyle();
+  });
 }
 
-function refreshUI(){
-  const bdrs=[...new Set(state.assignments.asIs.values())];
-  document.getElementById("bdrSelect").innerHTML=
-    "<option></option>"+bdrs.map(b=>`<option>${b}</option>`).join("");
-  document.getElementById("filterBDR").innerHTML=
-    bdrs.map(b=>`<option value="${b}">${b}</option>`).join("");
-  renderSummary();
+document.getElementById('btnSelectRect').onclick=()=>new L.Draw.Rectangle(state.map).enable();
+document.getElementById('btnSelectLasso').onclick=()=>new L.Draw.Polygon(state.map).enable();
+document.getElementById('btnClearSel').onclick=()=>{ state.selection.clear(); restyle(); };
+
+document.getElementById('btnSelectAll').onclick=()=>{
+  const filters = getActiveFilters();
+  state.selection.clear();
+  state.assignments[state.currentView].forEach((bdr, code)=>{
+    if(filters.size === 0 || filters.has(bdr)) state.selection.add(code);
+  });
+  restyle();
+};
+
+document.getElementById('btnSelectVisible').onclick=()=>{
+  const bounds = state.map.getBounds();
+  state.selection.clear();
+  state.features.forEach((feat, code)=>{
+    const pt = getCentroid(code);
+    if(pt && bounds.contains([pt[1], pt[0]])) state.selection.add(code);
+  });
+  restyle();
+};
+
+document.getElementById('btnAssign').onclick=()=>{
+  const val = document.getElementById('bdrSelect').value || document.getElementById('bdrInput').value.trim();
+  if(!val || !state.selection.size) return;
+  state.selection.forEach(c => state.assignments[state.currentView].set(c, val));
+  refreshDropdowns(); restyle(); renderSummary();
+  History.push(); 
+};
+
+document.getElementById('btnClearAssign').onclick=()=>{
+  state.selection.forEach(c => state.assignments[state.currentView].delete(c));
+  restyle(); renderSummary();
+  History.push(); 
+};
+
+/* --- UI Helpers --- */
+function styleFn(view){
+  return f => {
+    const c = String(f.properties[state.propKey]||'').toUpperCase().replace(/\s/g,'');
+    const bdr = state.assignments[view]?.get(c);
+    const filters = getActiveFilters();
+    if(filters.size > 0 && !filters.has(bdr)) return { fillOpacity: 0, opacity: 0, weight: 0, pointerEvents: 'none' };
+    const sel = state.selection.has(c);
+    return { color: sel?'#fff':'#444', weight: sel?2:0.5, fillColor: getColor(bdr), fillOpacity: bdr?0.7:0.1, opacity: 1, pointerEvents: 'auto' };
+  };
 }
+
+function featFn(f, l){
+  l.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    const c = String(f.properties[state.propKey]||'').toUpperCase().replace(/\s/g,'');
+    if(state.selection.has(c)) state.selection.delete(c); else state.selection.add(c);
+    restyle();
+  });
+  l.bindTooltip(()=>{
+    const c = String(f.properties[state.propKey]||'').toUpperCase().replace(/\s/g,'');
+    return `<b>${c}</b><br>${state.assignments[state.currentView].get(c)||'Unassigned'}`;
+  }, {sticky:true});
+}
+
+function getColor(b){
+  if(!b) return '#333';
+  if(!bdrColors.has(b)) bdrColors.set(b, palette[bdrColors.size%palette.length]);
+  return bdrColors.get(b);
+}
+
+function getCentroid(c){
+  if(state.centroids.has(c)) return state.centroids.get(c);
+  const f = state.features.get(c);
+  if(!f) return null;
+  const pt = turf.centroid(f).geometry.coordinates;
+  state.centroids.set(c, pt); return pt;
+}
+
+function refreshDropdowns(){
+  const allBDRs = [...new Set([...state.assignments.asIs.values(), ...state.assignments.optimized.values()])].filter(Boolean).sort();
+  document.getElementById('bdrSelect').innerHTML = '<option value="">Select existing BDR</option>' + allBDRs.map(b=>`<option>${b}</option>`).join("");
+  document.getElementById('filterBDR').innerHTML = allBDRs.map(b=>`<option value="${b}">${b}</option>`).join("");
+  renderLegend(allBDRs);
+}
+
+function renderLegend(bdrs){
+  const el = document.getElementById('legend'); el.innerHTML = '';
+  bdrs.forEach(b => el.innerHTML += `<div class="item"><span class="swatch" style="background:${getColor(b)}"></span>${b}</div>`);
+}
+
+function getActiveFilters(){ return new Set([...document.getElementById('filterBDR').selectedOptions].map(o=>o.value)); }
 
 function renderSummary(){
-  const body=document.getElementById("statsBody");
-  const counts={};
-  state.assignments[state.currentView].forEach(b=>{
-    counts[b]=(counts[b]||0)+1;
+  const body = document.getElementById('statsBody'), viewMap = state.assignments[state.currentView], filters = getActiveFilters(), byBDR = {};
+  for(const [c, b] of viewMap.entries()){
+    if(filters.size > 0 && !filters.has(b)) continue;
+    if(!byBDR[b]) byBDR[b] = [];
+    const pt = getCentroid(c); if(pt) byBDR[b].push(pt);
+  }
+  const rows = Object.keys(byBDR).sort().map(b => {
+    const pts = byBDR[b]; let maxD = 0, sumD = 0;
+    if(pts.length > 1){
+      const center = turf.centroid(turf.featureCollection(pts.map(p=>turf.point(p)))).geometry.coordinates;
+      pts.forEach(p=>{ const d = turf.distance(turf.point(p), turf.point(center)); sumD += d; if(d > maxD) maxD = d; });
+    }
+    return `<tr><td>${b}</td><td>${pts.length}</td><td>${Math.round(maxD)} km</td><td>${Math.round(sumD/(pts.length||1))} km</td></tr>`;
   });
-  body.innerHTML=Object.entries(counts)
-    .map(([b,c])=>`<tr><td>${b}</td><td>${c}</td></tr>`).join("");
+  body.innerHTML = rows.join("");
 }
 
-/* ================= BUTTONS ================= */
-document.getElementById("btnSeed").onclick=()=>{
-  state.assignments.optimized=new Map(state.assignments.asIs);
+function restyle(){ 
+  state.layers.asIs.setStyle(styleFn('asIs')); 
+  state.layers.optimized.setStyle(styleFn('optimized')); 
+}
+
+document.getElementById('btnApplyFilters').onclick = () => { restyle(); renderSummary(); };
+document.getElementById('btnClearFilter').onclick = () => { 
+  const sel = document.getElementById('filterBDR');
+  for(let i=0; i < sel.options.length; i++) sel.options[i].selected = false;
+  restyle(); renderSummary(); 
 };
 
-document.getElementById("btnAssign").onclick=()=>{
-  const b=document.getElementById("bdrSelect").value||
-          document.getElementById("bdrInput").value;
-  state.selection.forEach(c=>state.assignments[state.currentView].set(c,b));
-  refreshUI();
+document.getElementById('viewTabs').onclick = e => {
+  if(!e.target.dataset.view) return;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); e.target.classList.add('active');
+  state.currentView = e.target.dataset.view;
+  if(state.currentView === 'asIs'){ state.map.addLayer(state.layers.asIs); state.map.removeLayer(state.layers.optimized); }
+  else { state.map.addLayer(state.layers.optimized); state.map.removeLayer(state.layers.asIs); }
+  restyle(); renderSummary();
 };
 
-document.getElementById("btnClearAssign").onclick=()=>{
-  state.selection.forEach(c=>state.assignments[state.currentView].delete(c));
-  refreshUI();
+document.getElementById('btnSeed').onclick = () => { 
+  state.assignments.optimized = new Map(state.assignments.asIs); 
+  restyle(); renderSummary(); 
+  History.push(); 
 };
 
-document.getElementById("btnExport").onclick=()=>{
-  let csv="PostalCode,BDR\n";
+document.getElementById('btnExport').onclick = () => {
+  let csv = "PostalCode,BDR\n";
   state.assignments[state.currentView].forEach((b,c)=>csv+=`${c},${b}\n`);
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(new Blob([csv]));
-  a.download="GeoBoost.csv";a.click();
+  const a = document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download='export.csv'; a.click();
 };
 
-document.getElementById("viewTabs").onclick=e=>{
-  if(!e.target.dataset.view)return;
-  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
-  e.target.classList.add("active");
-  state.currentView=e.target.dataset.view;
-  loadShapes();
+document.getElementById('btnSaveProj').onclick=()=>{
+  const proj = { propKey: state.propKey, shapes: state.shapes, assignments: { asIs: [...state.assignments.asIs], optimized: [...state.assignments.optimized] } };
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(proj)], {type:'application/json'})); a.download = 'project.json'; a.click();
 };
+
+function setStatus(msg, type){
+  const el = document.getElementById('statusBox');
+  el.style.display='block'; el.innerHTML=msg; el.className=`status-msg ${type}`;
+}
 </script>
 </body>
 </html>
