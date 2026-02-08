@@ -29,6 +29,7 @@
     button.primary{background:var(--accent);color:#000;font-weight:bold;border:none;}
     button.action{border:1px solid var(--accent2);color:var(--accent2);font-weight:bold;}
     button.danger{color:var(--err); border:1px solid var(--err);}
+    button.ghost{background:#1b1c21;color:#ccc;border:1px solid #2a2c34}
     
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
     .tabs{display:flex;gap:4px;margin-bottom:10px;}
@@ -67,6 +68,10 @@
 
     <div class="card">
       <label>2. Selection Tools</label>
+      <div class="grid" style="margin-bottom:8px;">
+        <button id="btnUndo" class="ghost" disabled>↩ Undo</button>
+        <button id="btnRedo" class="ghost" disabled>↪ Redo</button>
+      </div>
       <div class="grid">
         <button id="btnSelectRect">Rectangle</button>
         <button id="btnSelectLasso">Lasso</button>
@@ -112,6 +117,40 @@ const state = {
 const bdrColors = {};
 const palette = ["#4ade80","#60a5fa","#f472b6","#f97316","#facc15","#c084fc","#22d3ee"];
 
+/* ================= HISTORY MODULE ================= */
+const History = {
+  stack: [], cursor: -1, maxLimit: 50,
+  capture() { 
+    return { 
+      asIs: Array.from(state.assignments.asIs.entries()), 
+      optimized: Array.from(state.assignments.optimized.entries()) 
+    }; 
+  },
+  push() {
+    if (this.cursor < this.stack.length - 1) this.stack = this.stack.slice(0, this.cursor + 1);
+    this.stack.push(this.capture());
+    if (this.stack.length > this.maxLimit) this.stack.shift(); else this.cursor++;
+    this.updateUI();
+  },
+  restore(snapshot) {
+    state.assignments.asIs = new Map(snapshot.asIs);
+    state.assignments.optimized = new Map(snapshot.optimized);
+    refreshUI(); 
+    this.updateUI();
+  },
+  undo() { if (this.cursor > 0) { this.cursor--; this.restore(this.stack[this.cursor]); } },
+  redo() { if (this.cursor < this.stack.length - 1) { this.cursor++; this.restore(this.stack[this.cursor]); } },
+  updateUI() {
+    document.getElementById('btnUndo').disabled = this.cursor <= 0;
+    document.getElementById('btnRedo').disabled = this.cursor >= this.stack.length - 1;
+  },
+  reset() { 
+    this.stack = [this.capture()]; 
+    this.cursor = 0; 
+    this.updateUI(); 
+  }
+};
+
 /* ================= INIT ================= */
 window.onload = async () => {
   state.map = L.map("map", { preferCanvas: true }).setView([52.1, 5.3], 7);
@@ -122,7 +161,14 @@ window.onload = async () => {
     initDraw();
     checkPowerBI();
     refreshUI();
+    History.reset();
   }
+
+  // Keyboard Shortcuts
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); History.undo(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); History.redo(); }
+  });
 };
 
 /* ================= DATA LOADING & VALIDATION ================= */
@@ -143,7 +189,6 @@ async function loadShapes(fileData = null) {
     state.features.clear();
     state.centroids.clear();
 
-    // Smart Auto-detection of Property Key
     if (geo.features.length > 0) {
       const firstProps = geo.features[0].properties;
       if (firstProps.hasOwnProperty('postcode')) state.propKey = 'postcode';
@@ -161,26 +206,22 @@ async function loadShapes(fileData = null) {
             state.features.set(code, f);
             state.centroids.set(code, centroid);
           }
-        } catch (e) {
-          console.warn(`Skipping PC ${code}: Invalid Geometry`);
-        }
+        } catch (e) { console.warn(`Skipping PC ${code}`); }
       }
     });
 
     renderMap();
     return true;
   } catch(e) {
-    console.error("Critical Load Error:", e);
+    console.error(e);
     statusBox.style.display = 'block';
-    statusBox.style.color = "#ff5555";
-    statusBox.innerText = `Error: ${e.message}. Upload shapes manually.`;
+    statusBox.innerText = `Error: ${e.message}`;
     return false;
   }
 }
 
 function renderMap() {
   if (state.geoLayer) state.map.removeLayer(state.geoLayer);
-  
   const validatedFeatures = state.shapes.features.filter(f => state.features.has(String(f.properties[state.propKey])));
   
   state.geoLayer = L.geoJSON({ type: "FeatureCollection", features: validatedFeatures }, {
@@ -189,8 +230,7 @@ function renderMap() {
       l.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
         const c = String(f.properties[state.propKey]);
-        if (state.selection.has(c)) state.selection.delete(c);
-        else state.selection.add(c);
+        if (state.selection.has(c)) state.selection.delete(c); else state.selection.add(c);
         state.geoLayer.setStyle(styleFn);
       });
       l.bindTooltip(() => {
@@ -235,10 +275,8 @@ function styleFn(f) {
   
   if (!bdrColors[b]) bdrColors[b] = palette[Object.keys(bdrColors).length % palette.length];
   return { 
-    fillColor: bdrColors[b], 
-    fillOpacity: 0.7, 
-    color: isSel ? "#fff" : "#222", 
-    weight: isSel ? 2 : 0.5 
+    fillColor: bdrColors[b], fillOpacity: 0.7, 
+    color: isSel ? "#fff" : "#222", weight: isSel ? 2 : 0.5 
   };
 }
 
@@ -250,9 +288,7 @@ function checkPowerBI() {
       if (Array.isArray(data)) {
         document.getElementById("pbiBadge").style.display = "inline";
         state.assignments.asIs.clear();
-        data.forEach(r => {
-          if (r.PostalCode) state.assignments.asIs.set(String(r.PostalCode), r.BDR);
-        });
+        data.forEach(r => { if (r.PostalCode) state.assignments.asIs.set(String(r.PostalCode), r.BDR); });
       }
     } catch(e) {}
   }
@@ -279,9 +315,12 @@ function refreshUI() {
 }
 
 /* ================= ACTIONS ================= */
+document.getElementById("btnUndo").onclick = () => History.undo();
+document.getElementById("btnRedo").onclick = () => History.redo();
+
 document.getElementById("shapeFile").onchange = e => {
   const reader = new FileReader();
-  reader.onload = ev => loadShapes(JSON.parse(ev.target.result));
+  reader.onload = ev => { loadShapes(JSON.parse(ev.target.result)); History.reset(); };
   reader.readAsText(e.target.files[0]);
 };
 
@@ -295,12 +334,14 @@ document.getElementById("btnAssign").onclick = () => {
   state.selection.forEach(c => state.assignments[state.currentView].set(c, b));
   state.selection.clear();
   refreshUI();
+  History.push();
 };
 
 document.getElementById("btnClearAssign").onclick = () => {
   state.selection.forEach(c => state.assignments[state.currentView].delete(c));
   state.selection.clear();
   refreshUI();
+  History.push();
 };
 
 document.getElementById("btnAutoFill").onclick = () => {
@@ -320,6 +361,7 @@ document.getElementById("btnAutoFill").onclick = () => {
     }
   });
   refreshUI();
+  History.push();
 };
 
 document.getElementById("viewTabs").onclick = e => {
@@ -333,6 +375,7 @@ document.getElementById("viewTabs").onclick = e => {
 document.getElementById("btnSeed").onclick = () => {
   state.assignments.optimized = new Map(state.assignments.asIs);
   refreshUI();
+  History.push();
 };
 
 document.getElementById("btnExport").onclick = () => {
