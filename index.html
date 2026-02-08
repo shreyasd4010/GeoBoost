@@ -61,7 +61,7 @@
 
     <div class="card">
       <label>1. Map Shapes</label>
-      <div id="ghStatus" style="font-size:10px; color:#4ade80; margin-bottom:5px; display:none;">✔ GitHub Data Loaded (NL_PC4.json)</div>
+      <div id="ghStatus" style="font-size:10px; color:#4ade80; margin-bottom:5px; display:none;">✔ GitHub Data Loaded</div>
       <input id="shapeFile" type="file" accept=".json,.geojson" />
     </div>
 
@@ -114,11 +114,9 @@ const palette = ["#4ade80","#60a5fa","#f472b6","#f97316","#facc15","#c084fc","#2
 
 /* ================= INIT ================= */
 window.onload = async () => {
-  // 1. Map Core
   state.map = L.map("map", { preferCanvas: true }).setView([52.1, 5.3], 7);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { opacity: 0.35 }).addTo(state.map);
 
-  // 2. Fetch Data before UI Init
   const loaded = await loadShapes();
   if (loaded) {
     initDraw();
@@ -134,7 +132,7 @@ async function loadShapes(fileData = null) {
 
   try {
     const geo = fileData || await fetch(GEOJSON_URL).then(r => {
-      if (!r.ok) throw new Error(`Status ${r.status}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     });
 
@@ -142,22 +140,32 @@ async function loadShapes(fileData = null) {
     if (!fileData) ghStatus.style.display = 'block';
     statusBox.style.display = 'none';
 
-    // Index Features
     state.features.clear();
     state.centroids.clear();
+
+    // Index Features with Safety Checks
     geo.features.forEach(f => {
-      const code = String(f.properties[state.propKey]);
-      state.features.set(code, f);
-      state.centroids.set(code, turf.centroid(f).geometry.coordinates);
+      const code = String(f.properties[state.propKey] || "");
+      if (!code) return;
+
+      // GEOMETRY VALIDATION: Skip malformed coordinates
+      if (f.geometry && f.geometry.coordinates && f.geometry.coordinates.length > 0) {
+        try {
+          state.features.set(code, f);
+          state.centroids.set(code, turf.centroid(f).geometry.coordinates);
+        } catch (turfError) {
+          console.warn(`Skipping PC ${code}: Malformed Geometry`, turfError);
+        }
+      }
     });
 
     renderMap();
     return true;
   } catch(e) {
-    console.warn("Load failed:", e.message);
+    console.error("Critical Load Error:", e);
     statusBox.style.display = 'block';
     statusBox.style.color = "#ff5555";
-    statusBox.innerText = `Fetch Error: ${e.message}. Please use the manual upload option.`;
+    statusBox.innerText = `Error: ${e.message}. Map data may be corrupted.`;
     return false;
   }
 }
@@ -180,7 +188,8 @@ function renderMap() {
         const b = state.assignments[state.currentView].get(c) || "Unassigned";
         return `<b>PC: ${c}</b><br>BDR: ${b}`;
       }, { sticky: true });
-    }
+    },
+    filter: (f) => state.features.has(String(f.properties[state.propKey])) // Only show features with valid geometry
   }).addTo(state.map);
   
   state.map.fitBounds(state.geoLayer.getBounds());
@@ -234,7 +243,7 @@ function checkPowerBI() {
       data.forEach(r => {
         if (r.PostalCode) state.assignments.asIs.set(String(r.PostalCode), r.BDR);
       });
-    } catch(e) { console.error("Power BI data parse failed."); }
+    } catch(e) {}
   }
 }
 
@@ -242,16 +251,13 @@ function refreshUI() {
   const allCurrent = [...state.assignments.asIs.values(), ...state.assignments.optimized.values()];
   const bdrs = [...new Set(allCurrent)].filter(Boolean).sort();
   
-  // Dropdown update
   document.getElementById("bdrSelect").innerHTML = '<option value="">Select Existing BDR</option>' + 
     bdrs.map(b => `<option>${b}</option>`).join("");
   
-  // Legend update
   document.getElementById("legend").innerHTML = bdrs.map(b => `
     <div class="item"><span class="swatch" style="background:${bdrColors[b]}"></span>${b}</div>
   `).join("");
 
-  // Summary Table update
   const counts = {};
   state.assignments[state.currentView].forEach(b => counts[b] = (counts[b] || 0) + 1);
   document.getElementById("statsBody").innerHTML = Object.entries(counts)
@@ -274,7 +280,7 @@ document.getElementById("btnClearSel").onclick = () => { state.selection.clear()
 
 document.getElementById("btnAssign").onclick = () => {
   const b = document.getElementById("bdrInput").value.trim() || document.getElementById("bdrSelect").value;
-  if (!b) return alert("Select or type a BDR name first.");
+  if (!b) return alert("Select or type a BDR name.");
   state.selection.forEach(c => state.assignments[state.currentView].set(c, b));
   state.selection.clear();
   refreshUI();
@@ -293,7 +299,7 @@ document.getElementById("btnAutoFill").onclick = () => {
     if (currentMap.has(code)) assigned.push({ pt: turf.point(pt), bdr: currentMap.get(code) });
   });
 
-  if (assigned.length === 0) return alert("Please assign at least one BDR manually before using Auto-Fill.");
+  if (assigned.length === 0) return alert("Assign at least one BDR manually first.");
 
   const assignedCollection = turf.featureCollection(assigned.map(a => a.pt));
   state.centroids.forEach((pt, code) => {
@@ -323,7 +329,7 @@ document.getElementById("btnExport").onclick = () => {
   state.assignments[state.currentView].forEach((b,c) => csv += `${c},${b}\n`);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
-  a.download = `GeoBoost_Export_${state.currentView}.csv`; a.click();
+  a.download = `GeoBoost_${state.currentView}.csv`; a.click();
 };
 </script>
 </body>
