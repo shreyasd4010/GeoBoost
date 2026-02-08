@@ -1,183 +1,59 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GeoBoost Territory Optimizer | ABInBev</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoBoost Territory Optimizer</title>
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
-<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-<script src="https://unpkg.com/shpjs@4.0.4/dist/shp.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 
-<style>
-html,body{margin:0;height:100%;background:#0b0b0c;color:#eaeaf0;font-family:system-ui}
-.app{display:grid;grid-template-columns:380px 1fr;height:100%}
-aside{padding:12px;border-right:1px solid #222;overflow:auto}
-#map{height:100%}
-button,select,input{width:100%;margin-top:6px}
-.pbi-badge{background:#facc15;color:#000;font-size:10px;padding:2px 6px;border-radius:4px;display:none}
-</style>
+  <style>
+    html, body { margin:0; padding:0; height:100%; }
+    #map { width: 100%; height: 100%; }
+  </style>
 </head>
-
 <body>
-<div class="app">
-  <aside>
-    <h3>GeoBoost <span id="pbiBadge" class="pbi-badge">POWER BI</span></h3>
-
-    <label>Upload Shape (optional)</label>
-    <input id="shapeFile" type="file" accept=".json,.geojson,.zip"/>
-
-    <label>Upload BDR Data (optional)</label>
-    <input id="bdrCsv" type="file" accept=".csv,.xlsx"/>
-
-    <label>Postal Column</label>
-    <select id="colCode"></select>
-
-    <label>BDR Column</label>
-    <select id="colBDR"></select>
-  </aside>
-
   <div id="map"></div>
-</div>
 
 <script>
-/* ================= CONFIG ================= */
 const GEOJSON_URL = "./NL_PC4_simplified.geojson";
 
-/* ================= STATE ================= */
-const state = {
-  map:null,
-  shapes:null,
-  propKey:null,
-  features:new Map(),
-  assignments:new Map(),
-  rawData:[]
-};
+let map = L.map("map").setView([52.1,5.3], 7);
 
-/* ================= MAP INIT ================= */
-state.map = L.map("map").setView([52.13,5.29],7);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(state.map);
-const geoLayer = L.geoJSON(null,{style:styleFn,onEachFeature:bindFeature}).addTo(state.map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png")
+  .addTo(map);
 
-/* ================= LOAD DEFAULT GEOJSON ================= */
-loadDefaultGeoJSON();
+/**
+ * Load the geojson file from this GitHub Pages site
+ */
+async function loadGeoJSON() {
+  try {
+    let res = await fetch(GEOJSON_URL);
+    if (!res.ok) throw new Error("GeoJSON load failed");
+    let geo = await res.json();
 
-async function loadDefaultGeoJSON(){
-  const res = await fetch(GEOJSON_URL);
-  const geo = await res.json();
-  state.shapes = geo;
-  initShapes();
-}
+    L.geoJSON(geo, {
+      style: function (f) {
+        return {
+          color: "#444",
+          weight: 0.6,
+          fillColor: "#88c",
+          fillOpacity: 0.5
+        };
+      }
+    }).addTo(map);
 
-/* ================= MANUAL GEO UPLOAD ================= */
-document.getElementById("shapeFile").onchange = async e=>{
-  const f=e.target.files[0];
-  const geo=f.name.endsWith(".zip")?await shp(f):JSON.parse(await f.text());
-  state.shapes=geo;
-  initShapes();
-};
+    map.fitBounds(L.geoJSON(geo).getBounds().pad(0.1));
 
-/* ================= SHAPE SETUP ================= */
-function initShapes(){
-  geoLayer.clearLayers();
-  state.features.clear();
-
-  const props=Object.keys(state.shapes.features[0].properties);
-  state.propKey=props.find(p=>/pc|zip|post/i.test(p))||props[0];
-
-  geoLayer.addData(state.shapes);
-  state.map.fitBounds(geoLayer.getBounds());
-
-  state.shapes.features.forEach(f=>{
-    const k=norm(f.properties[state.propKey]);
-    state.features.set(k,f);
-  });
-}
-
-/* ================= POWER BI BRIDGE ================= */
-(function pollPBI(){
-  try{
-    const data = window.GeoBoost_Input_NL || JSON.parse(window.name||"null");
-    if(Array.isArray(data)){
-      document.getElementById("pbiBadge").style.display="inline-block";
-      loadAssignments(data);
-      return;
-    }
-  }catch{}
-  setTimeout(pollPBI,500);
-})();
-
-function loadAssignments(rows){
-  state.rawData=rows;
-  initColumns();
-  applyAssignments();
-}
-
-/* ================= DATA ================= */
-document.getElementById("bdrCsv").onchange = async e=>{
-  const f=e.target.files[0];
-  if(f.name.endsWith(".xlsx")){
-    const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});
-    state.rawData=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-  }else{
-    const t=await f.text();
-    const [h,...r]=t.split(/\n/).filter(x=>x.trim());
-    const cols=h.split(",");
-    state.rawData=r.map(l=>{
-      const o={};l.split(",").forEach((v,i)=>o[cols[i]]=v);return o;
-    });
+  } catch (e) {
+    console.error("Failed to load GeoJSON: ", e);
   }
-  initColumns();
-  applyAssignments();
-};
-
-function initColumns(){
-  const keys=Object.keys(state.rawData[0]||{});
-  colCode.innerHTML=keys.map(k=>`<option>${k}</option>`).join("");
-  colBDR.innerHTML=keys.map(k=>`<option>${k}</option>`).join("");
 }
 
-function applyAssignments(){
-  state.assignments.clear();
-  state.rawData.forEach(r=>{
-    const c=norm(r[colCode.value]);
-    const b=r[colBDR.value];
-    if(c&&b)state.assignments.set(c,b);
-  });
-  geoLayer.setStyle(styleFn);
-}
-
-/* ================= MAP STYLE ================= */
-function styleFn(f){
-  const c=norm(f.properties[state.propKey]);
-  const b=state.assignments.get(c);
-  return{
-    color:"#333",
-    weight:0.5,
-    fillOpacity:b?0.7:0.1,
-    fillColor:b?colorFor(b):"#555"
-  };
-}
-
-function bindFeature(f,l){
-  l.bindTooltip(()=>{
-    const c=norm(f.properties[state.propKey]);
-    return `<b>${c}</b><br>${state.assignments.get(c)||"Unassigned"}`;
-  });
-}
-
-/* ================= HELPERS ================= */
-const colors=["#4ade80","#60a5fa","#f472b6","#facc15","#fb7185","#22d3ee"];
-const cmap=new Map();
-function colorFor(b){
-  if(!cmap.has(b))cmap.set(b,colors[cmap.size%colors.length]);
-  return cmap.get(b);
-}
-function norm(v){return String(v||"").toUpperCase().replace(/\s/g,"");}
+loadGeoJSON();
 </script>
+
 </body>
 </html>
