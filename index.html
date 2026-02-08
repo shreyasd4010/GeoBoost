@@ -13,7 +13,7 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <style>
-    :root{ --bg:#0b0b0c; --panel:#111114; --text:#eaeaf0; --accent:#ffd166; --accent2:#8ab4ff; }
+    :root{ --bg:#0b0b0c; --panel:#111114; --text:#eaeaf0; --accent:#ffd166; --accent2:#8ab4ff; --err:#ff5555; }
     html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;overflow:hidden;}
     .app{display:grid;grid-template-columns:380px 1fr;height:100%}
     aside{background:var(--panel);padding:12px;overflow-y:auto;border-right:1px solid #23242a;}
@@ -28,13 +28,14 @@
     button:hover{background:#1d1f25;}
     button.primary{background:var(--accent);color:#000;font-weight:bold;border:none;}
     button.action{border:1px solid var(--accent2);color:var(--accent2);font-weight:bold;}
+    button.danger{color:var(--err); border:1px solid var(--err);}
     
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
     .tabs{display:flex;gap:4px;margin-bottom:10px;}
     .tab{flex:1;padding:8px;text-align:center;border:1px solid #2a2c34;cursor:pointer;font-size:11px;border-radius:6px;}
     .tab.active{background:#2a2c34;color:#fff;font-weight:bold;}
     
-    .status-msg{font-size:10px;padding:6px;border-radius:4px;margin-bottom:10px;background:#1f2937;display:none;}
+    .status-msg{font-size:10px;padding:8px;border-radius:4px;margin-bottom:10px;background:#1f2937;display:none;line-height:1.4;}
     table{width:100%;font-size:10px;border-collapse:collapse;margin-top:8px;}
     th,td{text-align:left;padding:6px;border-bottom:1px solid #2a2c34;}
     .legend{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px;}
@@ -59,19 +60,18 @@
     </div>
 
     <div class="card">
-      <label>1. Map Shapes (Automatic or Manual)</label>
-      <div id="ghStatus" style="font-size:10px; color:#4ade80; margin-bottom:5px; display:none;">✔ GitHub Data Loaded</div>
+      <label>1. Map Shapes</label>
+      <div id="ghStatus" style="font-size:10px; color:#4ade80; margin-bottom:5px; display:none;">✔ GitHub Data Loaded (NL_PC4.json)</div>
       <input id="shapeFile" type="file" accept=".json,.geojson" />
     </div>
 
     <div class="card">
-      <label>2. Data Selection</label>
+      <label>2. Selection Tools</label>
       <div class="grid">
         <button id="btnSelectRect">Rectangle</button>
         <button id="btnSelectLasso">Lasso</button>
       </div>
-      <button id="btnSelectAll">Select All (Filtered)</button>
-      <button id="btnClearSel" style="color:#ff5555">Clear Selection</button>
+      <button id="btnClearSel" class="danger">Clear Current Selection</button>
     </div>
 
     <div class="card">
@@ -79,18 +79,18 @@
       <select id="bdrSelect"><option value="">Select Existing BDR</option></select>
       <input id="bdrInput" placeholder="Or type new BDR name"/>
       <div class="grid">
-        <button id="btnAssign" class="primary">Assign</button>
-        <button id="btnClearAssign">Remove</button>
+        <button id="btnAssign" class="primary">Assign Selected</button>
+        <button id="btnClearAssign">Remove Assignment</button>
       </div>
-      <button id="btnAutoFill" class="action" style="margin-top:10px;">✨ Smart Fill Gaps</button>
+      <button id="btnAutoFill" class="action" style="margin-top:10px;">✨ Smart Fill Unassigned Gaps</button>
       <div class="legend" id="legend"></div>
     </div>
 
     <div class="card">
       <label>4. Summary & Export</label>
-      <button id="btnExport">Export CSV</button>
+      <button id="btnExport">Export Final CSV</button>
       <table>
-        <thead><tr><th>BDR</th><th>Count</th></tr></thead>
+        <thead><tr><th>BDR Name</th><th>Postal Codes</th></tr></thead>
         <tbody id="statsBody"></tbody>
       </table>
     </div>
@@ -106,43 +106,59 @@ const state = {
   map:null, currentView:'asIs', shapes:null, propKey:'PC4',
   features:new Map(), centroids:new Map(),
   assignments:{ asIs:new Map(), optimized:new Map() },
-  selection:new Set(), rawData:[], geoLayer:null
+  selection:new Set(), geoLayer:null
 };
 
 const bdrColors = {};
-const palette = ["#4ade80","#60a5fa","#f472b6","#f97316","#facc15","#c084fc","#22d3ee"];
+const palette = ["#4ade80","#60a5fa","#f472b6","#f97316","#facc15","#c084fc","#22d3ee","#a3e635"];
 
 /* ================= INIT ================= */
 window.onload = async () => {
+  // 1. Map Core
   state.map = L.map("map", { preferCanvas: true }).setView([52.1, 5.3], 7);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { opacity: 0.4 }).addTo(state.map);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { opacity: 0.35 }).addTo(state.map);
 
-  initDraw();
-  await loadShapes();
-  checkPowerBI();
+  // 2. Fetch Data before UI Init
+  const loaded = await loadShapes();
+  if (loaded) {
+    initDraw();
+    checkPowerBI();
+    refreshUI();
+  }
 };
 
-/* ================= SPATIAL LOGIC ================= */
+/* ================= SPATIAL DATA LOADING ================= */
 async function loadShapes(fileData = null) {
-  try {
-    const geo = fileData || await fetch(GEOJSON_URL).then(r => r.json());
-    state.shapes = geo;
-    
-    if (!fileData) document.getElementById('ghStatus').style.display = 'block';
+  const ghStatus = document.getElementById('ghStatus');
+  const statusBox = document.getElementById('statusBox');
 
+  try {
+    const geo = fileData || await fetch(GEOJSON_URL).then(r => {
+      if (!r.ok) throw new Error(`Status ${r.status}`);
+      return r.json();
+    });
+
+    state.shapes = geo;
+    if (!fileData) ghStatus.style.display = 'block';
+    statusBox.style.display = 'none';
+
+    // Index Features
     state.features.clear();
     state.centroids.clear();
-
     geo.features.forEach(f => {
-      const c = String(f.properties[state.propKey]);
-      state.features.set(c, f);
-      state.centroids.set(c, turf.centroid(f).geometry.coordinates);
+      const code = String(f.properties[state.propKey]);
+      state.features.set(code, f);
+      state.centroids.set(code, turf.centroid(f).geometry.coordinates);
     });
 
     renderMap();
-    if (!fileData) state.map.fitBounds(state.geoLayer.getBounds());
+    return true;
   } catch(e) {
-    setStatus("Fetch failed. Please upload manually.", "#ff5555");
+    console.warn("Load failed:", e.message);
+    statusBox.style.display = 'block';
+    statusBox.style.color = "#ff5555";
+    statusBox.innerText = `Fetch Error: ${e.message}. Please use the manual upload option.`;
+    return false;
   }
 }
 
@@ -157,124 +173,115 @@ function renderMap() {
         const c = String(f.properties[state.propKey]);
         if (state.selection.has(c)) state.selection.delete(c);
         else state.selection.add(c);
-        restyle();
+        state.geoLayer.setStyle(styleFn);
       });
       l.bindTooltip(() => {
         const c = String(f.properties[state.propKey]);
         const b = state.assignments[state.currentView].get(c) || "Unassigned";
-        return `<b>${c}</b><br>${b}`;
+        return `<b>PC: ${c}</b><br>BDR: ${b}`;
       }, { sticky: true });
     }
   }).addTo(state.map);
-}
-
-function styleFn(f) {
-  const c = String(f.properties[state.propKey]);
-  const b = state.assignments[state.currentView].get(c);
-  const isSelected = state.selection.has(c);
-
-  if (!b) return { fillOpacity: 0.1, color: isSelected ? "#fff" : "#444", weight: isSelected ? 2 : 0.5 };
   
-  if (!bdrColors[b]) bdrColors[b] = palette[Object.keys(bdrColors).length % palette.length];
-  return { 
-    fillColor: bdrColors[b], 
-    fillOpacity: 0.7, 
-    color: isSelected ? "#fff" : "#222", 
-    weight: isSelected ? 2 : 0.5 
-  };
+  state.map.fitBounds(state.geoLayer.getBounds());
 }
 
-function restyle() {
-  if (state.geoLayer) state.geoLayer.setStyle(styleFn);
-}
-
-/* ================= SELECTION TOOLS ================= */
+/* ================= DRAWING TOOLS ================= */
 function initDraw() {
   const drawControl = new L.Control.Draw({
     draw: { polyline:false, marker:false, circle:false, circlemarker:false, 
-            rectangle: { shapeOptions: { color: '#fff' } },
-            polygon: { shapeOptions: { color: '#fff' } } }
+            rectangle: { shapeOptions: { color: '#fff', weight: 1, fillOpacity: 0.1 } },
+            polygon: { shapeOptions: { color: '#fff', weight: 1, fillOpacity: 0.1 } } }
   });
+  state.map.addControl(drawControl);
 
   state.map.on(L.Draw.Event.CREATED, (e) => {
-    const layer = e.layer;
-    const poly = layer.toGeoJSON();
+    const poly = e.layer.toGeoJSON();
     state.features.forEach((feat, code) => {
       const pt = state.centroids.get(code);
       if (pt && turf.booleanPointInPolygon(turf.point(pt), poly)) {
         state.selection.add(code);
       }
     });
-    restyle();
+    state.geoLayer.setStyle(styleFn);
   });
 }
 
-/* ================= POWER BI & DATA ================= */
+function styleFn(f) {
+  const c = String(f.properties[state.propKey]);
+  const b = state.assignments[state.currentView].get(c);
+  const isSel = state.selection.has(c);
+
+  if (!b) return { fillOpacity: isSel ? 0.4 : 0.05, color: isSel ? "#fff" : "#444", weight: isSel ? 2 : 0.5 };
+  
+  if (!bdrColors[b]) bdrColors[b] = palette[Object.keys(bdrColors).length % palette.length];
+  return { 
+    fillColor: bdrColors[b], 
+    fillOpacity: 0.7, 
+    color: isSel ? "#fff" : "#222", 
+    weight: isSel ? 2 : 0.5 
+  };
+}
+
+/* ================= POWER BI & INTERFACE ================= */
 function checkPowerBI() {
   if (window.name) {
     try {
       const data = JSON.parse(window.name);
-      state.rawData = data;
+      if (!Array.isArray(data)) return;
       document.getElementById("pbiBadge").style.display = "inline";
-      applyAssignments();
-    } catch(e) {}
+      state.assignments.asIs.clear();
+      data.forEach(r => {
+        if (r.PostalCode) state.assignments.asIs.set(String(r.PostalCode), r.BDR);
+      });
+    } catch(e) { console.error("Power BI data parse failed."); }
   }
 }
 
-function applyAssignments() {
-  state.assignments.asIs.clear();
-  state.rawData.forEach(r => {
-    if (r.PostalCode) state.assignments.asIs.set(String(r.PostalCode), r.BDR);
-  });
-  refreshUI();
-}
-
-/* ================= UI HELPERS ================= */
 function refreshUI() {
-  const bdrs = [...new Set([...state.assignments.asIs.values(), ...state.assignments.optimized.values()])].filter(Boolean);
-  document.getElementById("bdrSelect").innerHTML = '<option value="">Select Existing BDR</option>' + 
-    bdrs.sort().map(b => `<option>${b}</option>`).join("");
+  const allCurrent = [...state.assignments.asIs.values(), ...state.assignments.optimized.values()];
+  const bdrs = [...new Set(allCurrent)].filter(Boolean).sort();
   
-  renderLegend(bdrs);
-  renderSummary();
-  restyle();
-}
-
-function renderLegend(bdrs) {
-  const leg = document.getElementById("legend");
-  leg.innerHTML = bdrs.map(b => `
-    <div class="item"><span class="swatch" style="background:${bdrColors[b] || '#333'}"></span>${b}</div>
+  // Dropdown update
+  document.getElementById("bdrSelect").innerHTML = '<option value="">Select Existing BDR</option>' + 
+    bdrs.map(b => `<option>${b}</option>`).join("");
+  
+  // Legend update
+  document.getElementById("legend").innerHTML = bdrs.map(b => `
+    <div class="item"><span class="swatch" style="background:${bdrColors[b]}"></span>${b}</div>
   `).join("");
-}
 
-function renderSummary() {
+  // Summary Table update
   const counts = {};
   state.assignments[state.currentView].forEach(b => counts[b] = (counts[b] || 0) + 1);
   document.getElementById("statsBody").innerHTML = Object.entries(counts)
     .sort((a,b) => b[1] - a[1])
     .map(([b,c]) => `<tr><td>${b}</td><td>${c}</td></tr>`).join("");
+    
+  if (state.geoLayer) state.geoLayer.setStyle(styleFn);
 }
 
-function setStatus(msg, color) {
-  const box = document.getElementById("statusBox");
-  box.style.display = "block"; box.innerText = msg; box.style.color = color;
-}
-
-/* ================= BUTTON EVENTS ================= */
-document.getElementById("shapeFile").onchange = async (e) => {
+/* ================= ACTIONS ================= */
+document.getElementById("shapeFile").onchange = e => {
   const reader = new FileReader();
-  reader.onload = (ev) => loadShapes(JSON.parse(ev.target.result));
+  reader.onload = ev => loadShapes(JSON.parse(ev.target.result));
   reader.readAsText(e.target.files[0]);
 };
 
 document.getElementById("btnSelectRect").onclick = () => new L.Draw.Rectangle(state.map).enable();
 document.getElementById("btnSelectLasso").onclick = () => new L.Draw.Polygon(state.map).enable();
-document.getElementById("btnClearSel").onclick = () => { state.selection.clear(); restyle(); };
+document.getElementById("btnClearSel").onclick = () => { state.selection.clear(); state.geoLayer.setStyle(styleFn); };
 
 document.getElementById("btnAssign").onclick = () => {
-  const b = document.getElementById("bdrInput").value || document.getElementById("bdrSelect").value;
-  if (!b) return alert("Select or type a BDR name");
+  const b = document.getElementById("bdrInput").value.trim() || document.getElementById("bdrSelect").value;
+  if (!b) return alert("Select or type a BDR name first.");
   state.selection.forEach(c => state.assignments[state.currentView].set(c, b));
+  state.selection.clear();
+  refreshUI();
+};
+
+document.getElementById("btnClearAssign").onclick = () => {
+  state.selection.forEach(c => state.assignments[state.currentView].delete(c));
   state.selection.clear();
   refreshUI();
 };
@@ -286,7 +293,7 @@ document.getElementById("btnAutoFill").onclick = () => {
     if (currentMap.has(code)) assigned.push({ pt: turf.point(pt), bdr: currentMap.get(code) });
   });
 
-  if (assigned.length === 0) return alert("Assign at least one BDR first!");
+  if (assigned.length === 0) return alert("Please assign at least one BDR manually before using Auto-Fill.");
 
   const assignedCollection = turf.featureCollection(assigned.map(a => a.pt));
   state.centroids.forEach((pt, code) => {
@@ -298,10 +305,10 @@ document.getElementById("btnAutoFill").onclick = () => {
   refreshUI();
 };
 
-document.getElementById("viewTabs").onclick = (e) => {
+document.getElementById("viewTabs").onclick = e => {
   if (!e.target.dataset.view) return;
-  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-  e.target.classList.add("active");
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  e.target.classList.add('active');
   state.currentView = e.target.dataset.view;
   refreshUI();
 };
@@ -316,7 +323,7 @@ document.getElementById("btnExport").onclick = () => {
   state.assignments[state.currentView].forEach((b,c) => csv += `${c},${b}\n`);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
-  a.download = `GeoBoost_${state.currentView}.csv`; a.click();
+  a.download = `GeoBoost_Export_${state.currentView}.csv`; a.click();
 };
 </script>
 </body>
